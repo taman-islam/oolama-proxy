@@ -32,6 +32,7 @@ func main() {
 	// Admin APIs — auth enforced at group level
 	admin := e.Group("/admin", auth.AdminAuthMiddleware)
 	admin.POST("/limits", handler.SetLimits(lim))
+	admin.POST("/suspend", handler.SuspendUser(lim))
 	admin.GET("/ui", ui.Dashboard(s, lim))
 
 	// Catch-all: explicit 404

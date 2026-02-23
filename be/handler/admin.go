@@ -30,14 +30,12 @@ func (r setLimitsRequest) validate() error {
 		{"max_tokens_per_request", r.MaxTokensPerReq},
 	}
 	for _, f := range fields {
-		if f.value < 0 {
-			return fmt.Errorf("field %q must not be negative; got %d", f.name, f.value)
-		}
-		if f.value == 0 {
-			return fmt.Errorf("field %q must be explicitly set (> 0); use a positive value", f.name)
+		if f.value <= 0 {
+			return fmt.Errorf("field %q must be > 0; got %d", f.name, f.value)
 		}
 	}
 	if r.UserID == "" {
+		// TODO(Taman / critical): Add a user ID validator.
 		return fmt.Errorf("field \"user_id\" is required")
 	}
 	return nil
@@ -65,6 +63,29 @@ func SetLimits(lim *limiter.Limiter) echo.HandlerFunc {
 			"rps":                    req.RPS,
 			"max_tokens":             req.MaxTokens,
 			"max_tokens_per_request": req.MaxTokensPerReq,
+		})
+	}
+
+}
+
+func SuspendUser(lim *limiter.Limiter) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Defense-in-depth: verify admin context key was set by AdminAuthMiddleware.
+		if ok, isAdmin := c.Get(auth.AdminCtxKey).(bool); !ok || !isAdmin {
+			return c.JSON(http.StatusForbidden, echo.Map{"error": "admin access required"})
+		}
+		var req struct {
+			UserID string `json:"user_id"`
+		}
+		if err := c.Bind(&req); err != nil || req.UserID == "" {
+			return c.JSON(http.StatusBadRequest, echo.Map{"error": "user_id is required"})
+		}
+		// rps=0 → rate.Limit(0) with burst 0: Allow() always returns false.
+		// This hard-blocks the user on every incoming request.
+		lim.SetLimits(req.UserID, 0, 0, 0)
+		return c.JSON(http.StatusOK, echo.Map{
+			"user_id": req.UserID,
+			"status":  "suspended",
 		})
 	}
 }

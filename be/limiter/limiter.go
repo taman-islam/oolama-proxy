@@ -74,8 +74,6 @@ func (l *Limiter) SetLimits(user string, rps int, maxTokens, maxTokensPerReq int
 	switch rps {
 	case INF_RPS:
 		u.limiter = rate.NewLimiter(rate.Inf, 0)
-	case 0:
-		// 0 = keep current
 	default:
 		u.limiter = rate.NewLimiter(rate.Limit(rps), rps)
 	}

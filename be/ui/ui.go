@@ -39,9 +39,43 @@ const rawDashboardTemplate = `<!DOCTYPE html>
   .quota-bar-wrap { background: #0f0f13; border-radius: 999px; height: 6px; width: 120px; display: inline-block; vertical-align: middle; margin-left: 0.5rem; }
   .quota-bar { height: 6px; border-radius: 999px; background: #7c3aed; }
   .inf { color: #64748b; font-style: italic; }
+  .btn-suspend {
+    background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d;
+    border-radius: 6px; padding: 0.2rem 0.6rem; font-size: 0.75rem;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .btn-suspend:hover { background: #7f1d1d; }
+  .toast {
+    position: fixed; bottom: 1.5rem; right: 1.5rem;
+    padding: 0.6rem 1rem; border-radius: 8px; font-size: 0.8rem;
+    display: none; z-index: 99;
+  }
+  .toast.ok  { background: #052e16; color: #86efac; border: 1px solid #166534; }
+  .toast.err { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
 </style>
 </head>
 <body>
+<div id="toast" class="toast"></div>
+<script>
+function suspend(userId) {
+  const key = document.cookie.split('; ').find(r=>r.startsWith('admin_key='))?.split('=')[1]
+    || prompt('Admin API key:');
+  if (!key) return;
+  fetch('/admin/suspend', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','Authorization':'Bearer '+key},
+    body: JSON.stringify({user_id: userId})
+  }).then(r => showToast(r.ok ? 'User suspended: '+userId : 'Error '+r.status, r.ok))
+    .catch(e => showToast('Request failed: '+e, false));
+}
+function showToast(msg, ok) {
+  const t = document.getElementById('toast');
+  t.className = 'toast ' + (ok ? 'ok' : 'err');
+  t.textContent = msg;
+  t.style.display = 'block';
+  setTimeout(() => t.style.display='none', 3000);
+}
+</script>key
 <h1>🔮 Proxy Admin Dashboard</h1>
 <p class="subtitle">Ollama OpenAI-Compatible Proxy &mdash; live view</p>
 
@@ -70,7 +104,7 @@ const rawDashboardTemplate = `<!DOCTYPE html>
 <div class="card">
   <h2>Rate &amp; Quota Limits</h2>
   <table>
-    <thead><tr><th>User</th><th>RPS Limit</th><th>Token Quota</th><th>Tokens Used</th><th>Remaining</th></tr></thead>
+    <thead><tr><th>User</th><th>RPS Limit</th><th>Token Quota</th><th>Tokens Used</th><th>Remaining</th><th>Actions</th></tr></thead>
     <tbody>
     {{- range $user, $info := .Limits}}
       <tr>
@@ -85,6 +119,7 @@ const rawDashboardTemplate = `<!DOCTYPE html>
             <span class="quota-bar-wrap"><div class="quota-bar" style="width:{{pct $info.UsedTokens $info.MaxTokens}}%"></div></span>
           {{- end}}
         </td>
+        <td><button class="btn-suspend" onclick="suspend('{{$user}}')">Suspend</button></td>
       </tr>
     {{- else}}
       <tr><td colspan="5" style="color:#64748b;text-align:center;padding:1.5rem">No limits configured.</td></tr>
