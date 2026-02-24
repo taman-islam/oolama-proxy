@@ -58,6 +58,23 @@ npm run dev
 
 The frontend starts on `http://localhost:3000`.
 
+## Load Testing
+
+The repository includes a standalone Go load-testing script `test_load.go` to benchmark the proxy's throughput and rate-limiting concurrently, without needing to install third-party tools like `hey` or `vegeta`.
+
+To run a load test (e.g., 100 total requests, 10 at a time):
+
+```bash
+go run test_load.go -n 100 -c 10 -m "llama3.2:1b"
+```
+
+The script will output:
+
+- Requests/second
+- Fast/Average/Slowest latency
+- p50/p90/p99 latency distribution
+- A distribution of HTTP status codes (useful for verifying `429 Too Many Requests` when testing your rate limit configurations).
+
 ## Testing the Proxy
 
 You can query the Go proxy directly using standard OpenAI clients, pointing them at port `8000`.

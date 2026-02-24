@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import { useState, useRef, useEffect, FormEvent } from "react";
@@ -7,15 +8,19 @@ import { isLoggedIn, getUserId, getApiKey, clearSession } from "@/lib/auth";
 interface Message {
   role: "user" | "assistant";
   content: string;
+  image?: string | null;
 }
 
 export default function ChatPage() {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isLoggedIn()) {
@@ -23,32 +28,113 @@ export default function ChatPage() {
       return;
     }
     setCurrentUser(getUserId());
+
+    // Load persisted chat
+    const saved = localStorage.getItem(`chat_history_${getUserId()}`);
+    if (saved) {
+      try {
+        setMessages(JSON.parse(saved));
+      } catch {
+        // ignore parse error
+      }
+    }
   }, [router]);
 
   useEffect(() => {
+    if (messages.length > 0 && currentUser) {
+      // 1. Limit raw message count (keep last 50 messages / 25 turns)
+      let historyToSave = messages.slice(-50);
+
+      try {
+        let serialized = JSON.stringify(historyToSave);
+
+        // 2. Limit byte size (localStorage quota is usually ~5MB, we cap at ~1MB to be safe)
+        // If it's too large (likely due to base64 images), we progressively drop the oldest messages
+        while (serialized.length > 1024 * 1024 && historyToSave.length > 2) {
+          historyToSave = historyToSave.slice(2); // Drop oldest user/assistant pair
+          serialized = JSON.stringify(historyToSave);
+        }
+
+        localStorage.setItem(`chat_history_${currentUser}`, serialized);
+      } catch (err) {
+        console.warn("Failed to serialize or save chat history", err);
+      }
+    }
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, currentUser]);
+
+  useEffect(() => {
+    if (!streaming) {
+      inputRef.current?.focus();
+    }
+  }, [streaming]);
+
+  const clearChat = () => {
+    setMessages([]);
+    localStorage.removeItem(`chat_history_${currentUser}`);
+  };
 
   const handleLogout = () => {
     clearSession();
     router.replace("/login");
   };
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setSelectedImage(event.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+    // Reset input so the same file can be selected again
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeImage = () => {
+    setSelectedImage(null);
+  };
+
   const send = async (e: FormEvent) => {
     e.preventDefault();
     const text = input.trim();
-    if (!text || streaming) return;
+    if ((!text && !selectedImage) || streaming) return;
+
+    const currentInput = text;
+    const currentImage = selectedImage;
+
     setInput("");
+    setSelectedImage(null);
 
     const newMessages: Message[] = [
       ...messages,
-      { role: "user", content: text },
+      { role: "user", content: currentInput, image: currentImage },
     ];
     setMessages(newMessages);
     setStreaming(true);
 
     // Append an empty assistant turn we'll stream into
     setMessages((m) => [...m, { role: "assistant", content: "" }]);
+
+    // Determine model and payload structure based on presence of image
+    const model = currentImage ? "moondream" : "llama3.2";
+
+    const apiMessages = newMessages.map((m) => {
+      if (m.role === "user" && m.image) {
+        return {
+          role: m.role,
+          content: [
+            { type: "text", text: m.content || "Analyze this image." },
+            { type: "image_url", image_url: { url: m.image } },
+          ],
+        };
+      }
+      return {
+        role: m.role,
+        content: m.content,
+      };
+    });
 
     try {
       const res = await fetch("http://localhost:8000/v1/chat/completions", {
@@ -58,12 +144,9 @@ export default function ChatPage() {
           Authorization: `Bearer ${getApiKey() ?? ""}`,
         },
         body: JSON.stringify({
-          model: "llama3.2",
+          model,
           stream: true,
-          messages: newMessages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
+          messages: apiMessages,
         }),
       });
 
@@ -124,12 +207,17 @@ export default function ChatPage() {
         className="flex items-center justify-between px-6 py-3 border-b shrink-0"
         style={{ borderColor: "var(--border)", background: "var(--surface)" }}
       >
-        <span
-          className="font-semibold text-sm"
-          style={{ color: "var(--purple)" }}
-        >
-          🔮 Proxy Chat
-        </span>
+        <div className="flex items-center gap-3">
+          <span
+            className="font-semibold text-sm"
+            style={{ color: "var(--purple)" }}
+          >
+            🔮 Proxy Chat
+          </span>
+          <span className="text-xs px-2 py-1 rounded bg-black/20 text-gray-400 border border-white/5 ml-2">
+            Auto-switches to {selectedImage ? "moondream" : "llama3.2"}
+          </span>
+        </div>
         <div className="flex items-center gap-3">
           <button
             onClick={() => router.push("/usage")}
@@ -151,6 +239,17 @@ export default function ChatPage() {
               {currentUser}
             </span>
           )}
+          <button
+            onClick={clearChat}
+            className="text-xs px-3 py-1 rounded-lg transition-colors cursor-pointer"
+            style={{
+              color: "var(--red-text)",
+              background: "var(--surface)",
+              border: "1px solid var(--red-border)",
+            }}
+          >
+            🗑️ Clear
+          </button>
           <button
             onClick={handleLogout}
             className="text-xs px-3 py-1 rounded-lg"
@@ -178,26 +277,43 @@ export default function ChatPage() {
         {messages.map((m, i) => (
           <div
             key={i}
-            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+            className={`flex flex-col gap-2 ${m.role === "user" ? "items-end" : "items-start"}`}
           >
+            {m.image && (
+              <div
+                className="max-w-[50%] rounded-xl overflow-hidden border"
+                style={{ borderColor: "var(--border)" }}
+              >
+                <img
+                  src={m.image}
+                  alt="Uploaded attachment"
+                  className="w-full object-cover"
+                />
+              </div>
+            )}
             <div
-              className="max-w-[75%] px-4 py-2 rounded-2xl text-sm whitespace-pre-wrap"
+              className={`max-w-[75%] px-4 py-2 text-sm whitespace-pre-wrap ${!m.content && m.image ? "hidden" : ""}`}
               style={
                 m.role === "user"
                   ? {
                       background: "var(--purple)",
                       color: "#fff",
+                      borderRadius: "16px",
                       borderBottomRightRadius: "4px",
                     }
                   : {
                       background: "var(--surface)",
                       color: "var(--text)",
                       border: "1px solid var(--border)",
+                      borderRadius: "16px",
                       borderBottomLeftRadius: "4px",
                     }
               }
             >
-              {m.content || <span style={{ opacity: 0.4 }}>▌</span>}
+              {m.content ||
+                (m.role === "assistant" && (
+                  <span style={{ opacity: 0.4 }}>▌</span>
+                ))}
             </div>
           </div>
         ))}
@@ -207,29 +323,70 @@ export default function ChatPage() {
       {/* Input */}
       <form
         onSubmit={send}
-        className="shrink-0 flex gap-2 px-4 py-4 border-t"
+        className="shrink-0 flex flex-col px-4 py-4 border-t"
         style={{ borderColor: "var(--border)", background: "var(--surface)" }}
       >
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Message…"
-          disabled={streaming}
-          className="flex-1 px-4 py-2 rounded-xl text-sm outline-none"
-          style={{
-            background: "var(--bg)",
-            border: "1px solid var(--border)",
-            color: "var(--text)",
-          }}
-        />
-        <button
-          type="submit"
-          disabled={streaming || !input.trim()}
-          className="px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-40 transition-opacity"
-          style={{ background: "var(--purple)", color: "#fff" }}
-        >
-          {streaming ? "…" : "Send"}
-        </button>
+        {selectedImage && (
+          <div className="mb-3 relative inline-block w-20 h-20 group">
+            <img
+              src={selectedImage}
+              className="w-full h-full object-cover rounded-lg border"
+              style={{ borderColor: "var(--border)" }}
+              alt="Preview"
+            />
+            <button
+              type="button"
+              onClick={removeImage}
+              className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity transition-colors"
+            >
+              ×
+            </button>
+          </div>
+        )}
+        <div className="flex gap-2 relative">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="w-10 h-10 flex items-center justify-center rounded-xl transition-colors shrink-0"
+            style={{
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              color: "var(--text)",
+            }}
+          >
+            <span className="text-lg opacity-80">+</span>
+          </button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleImageUpload}
+            accept="image/*"
+            className="hidden"
+          />
+
+          <input
+            ref={inputRef}
+            autoFocus
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={selectedImage ? "Ask about this image..." : "Message…"}
+            disabled={streaming}
+            className="flex-1 px-4 py-2 rounded-xl text-sm outline-none"
+            style={{
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              color: "var(--text)",
+            }}
+          />
+          <button
+            type="submit"
+            disabled={streaming || (!input.trim() && !selectedImage)}
+            className="px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-40 transition-opacity"
+            style={{ background: "var(--purple)", color: "#fff" }}
+          >
+            {streaming ? "…" : "Send"}
+          </button>
+        </div>
       </form>
     </div>
   );
