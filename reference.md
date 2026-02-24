@@ -25,6 +25,7 @@ Testing keys currently available:
 - `sk-alice-001`
 - `sk-bob-001`
 - `sk-charlie-001`
+- `sk-admin-001` [admin]
 
 ---
 

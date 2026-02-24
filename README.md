@@ -1,6 +1,6 @@
-# Ollama / OpenAI-Compatible API Proxy
+# Ollama / OpenAI-Compatible API Proxy (Single Node)
 
-A high-performance reverse proxy for [Ollama](https://ollama.com) that sits between your users and the inference engine. It injects authentication, usage accounting, rate limiting, and an admin dashboard—all while supporting zero-buffered streaming Server-Sent Events (SSE).
+A high-performance reverse proxy for [Ollama](https://ollama.com) that sits between your users and the inference engine. It injects authentication, usage accounting, rate limiting, and an admin dashboard—all while supporting streaming Server-Sent Events (SSE) without buffering the full response.
 
 The repository is split into two halves:
 
@@ -8,6 +8,13 @@ The repository is split into two halves:
 - `fe/` - Modern Next.js Admin Dashboard & Chat UI
 
 ## Features
+
+### Documentation References
+
+For deep dives into the API specs and architectural decisions of each stack, please see the dedicated reference documents:
+
+- [Backend Proxy Reference](reference.md)
+- [Frontend architecture Reference](fe/reference.md)
 
 ### Backend (`be/`)
 
@@ -114,3 +121,42 @@ The system currently exposes mock users for testing out the UI and rate limits:
 | `alice`   | `alice123` | `sk-alice-123` | User      |
 | `bob`     | `bob123`   | `sk-bob-456`   | User      |
 | `charlie` | `char123`  | `sk-char-789`  | User      |
+
+## Out of Scope
+
+The following capabilities were intentionally excluded from this version to keep the scope focused, the system easy to evaluate, and the demo friction-free. Each item is well understood and designed for, but not required to meet the goals of this exercise.
+
+### Horizontal Load Balancing
+
+The proxy is currently deployed as a single stateless instance.
+The Go proxy comfortably handles tens of thousands of requests per second; in practice, model inference (Ollama) is the dominant bottleneck.
+
+Horizontal scaling would involve running multiple proxy replicas behind a standard L4/L7 load balancer (e.g. NGINX, Envoy) with a shared Redis backend for usage and rate limits. This was omitted to avoid unnecessary distributed-system complexity for a single-node demo.
+
+### Multi-Node Ollama / Inference Scheduling
+
+Requests are forwarded to a single Ollama instance. Support for multiple inference backends (e.g. GPU pool, weighted routing, health-based failover) is a natural extension, but was intentionally excluded. The proxy interface and rate-limiting model are already compatible with this design.
+
+### Persistent Storage
+
+Usage accounting and limits are stored in memory for simplicity. A Redis-backed implementation is planned and would enable:
+
+- Persistence across restarts
+- Multi-proxy deployments
+- Stronger rate-limit guarantees
+
+In-memory storage was chosen to minimize setup overhead for reviewers.
+
+### Authentication & Secrets Management
+
+API keys and users are statically defined for demonstration purposes. Production deployments would integrate with:
+
+- Secure secret storage
+- OAuth / SSO
+- Rotatable API keys
+
+These were excluded to keep the authentication flow transparent and easy to inspect.
+
+### Model Lifecycle Management
+
+Models are assumed to be preloaded in Ollama. Dynamic model downloads, eviction, and version pinning are out of scope for this submission.
