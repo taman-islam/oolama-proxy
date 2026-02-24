@@ -1,6 +1,9 @@
 package store
 
-import "sync"
+import (
+	"lb/users"
+	"sync"
+)
 
 // ModelUsage tracks token usage for one model.
 type ModelUsage struct {
@@ -50,6 +53,9 @@ func (s *Store) GetAll() map[string]map[string]ModelUsage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(map[string]map[string]ModelUsage)
+	for _, user := range users.All() {
+		out[user.ID] = make(map[string]ModelUsage)
+	}
 	for user, models := range s.data {
 		out[user] = make(map[string]ModelUsage)
 		for model, u := range models {

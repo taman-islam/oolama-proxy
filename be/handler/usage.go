@@ -12,10 +12,10 @@ import (
 // Returns token usage for the authenticated user, keyed by model.
 func Usage(s *store.Store) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		key := auth.ExtractKey(c)
-		if key == "" {
-			return c.JSON(http.StatusUnauthorized, echo.Map{"error": "missing API key"})
+		userID, ok := auth.ResolveUser(auth.ExtractKey(c))
+		if !ok || userID == "" {
+			return c.JSON(http.StatusUnauthorized, echo.Map{"error": "invalid API key"})
 		}
-		return c.JSON(http.StatusOK, s.Get(key))
+		return c.JSON(http.StatusOK, s.Get(userID))
 	}
 }

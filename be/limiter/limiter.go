@@ -2,6 +2,7 @@ package limiter
 
 import (
 	"fmt"
+	"lb/users"
 	"sync"
 	"sync/atomic"
 
@@ -16,9 +17,9 @@ import (
 const tokenQuotaGrace = 5
 
 const (
-	FREE_TIER_RPS            = 10
-	FREE_TIER_TOKENS         = 100
-	FREE_TIER_TOKENS_PER_REQ = 10
+	FREE_TIER_RPS            = 1000
+	FREE_TIER_TOKENS         = 100000
+	FREE_TIER_TOKENS_PER_REQ = 4000
 
 	INF_RPS           = -1
 	INF_TOKENS        = -1
@@ -134,12 +135,24 @@ func (l *Limiter) GetAllLimits() map[string]LimitInfo {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	out := make(map[string]LimitInfo)
-	for user, u := range l.users {
-		out[user] = LimitInfo{
-			MaxTokens:       u.maxTokens,
-			MaxTokensPerReq: u.maxTokensPerReq,
-			UsedTokens:      u.usedTokens.Load(),
-			RPS:             float64(u.limiter.Limit()),
+
+	// Seed all registered users, using their current limiter state if known
+	// or free-tier defaults if they haven't made a request yet.
+	for _, u := range users.All() {
+		if lu, ok := l.users[u.ID]; ok {
+			out[u.ID] = LimitInfo{
+				MaxTokens:       lu.maxTokens,
+				MaxTokensPerReq: lu.maxTokensPerReq,
+				UsedTokens:      lu.usedTokens.Load(),
+				RPS:             float64(lu.limiter.Limit()),
+			}
+		} else {
+			out[u.ID] = LimitInfo{
+				MaxTokens:       FREE_TIER_TOKENS,
+				MaxTokensPerReq: FREE_TIER_TOKENS_PER_REQ,
+				UsedTokens:      0,
+				RPS:             FREE_TIER_RPS,
+			}
 		}
 	}
 	return out

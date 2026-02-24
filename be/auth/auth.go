@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"lb/users"
 	"net/http"
 	"strings"
 
@@ -9,7 +10,6 @@ import (
 
 // TODO(Taman / critical): Move to vault and make this configurable.
 const (
-	AdminKey    = "sk-admin"
 	AdminCtxKey = "adminCtxKey"
 )
 
@@ -23,9 +23,26 @@ func ExtractKey(c echo.Context) string {
 	return strings.TrimPrefix(h, "Bearer ")
 }
 
-// IsAdmin returns true if the key is the fixed admin key.
+// IsAdmin returns true if the key belongs to an admin user.
 func IsAdmin(key string) bool {
-	return key == AdminKey
+	if u, ok := users.Lookup(key); ok {
+		return u.IsAdmin
+	}
+	return false
+}
+
+// ResolveUser validates the Bearer key and returns the resolved user ID.
+// Admin key returns "admin" and bypasses the user registry.
+// Unknown keys return empty string and false.
+func ResolveUser(key string) (userID string, ok bool) {
+	if IsAdmin(key) {
+		return "admin", true
+	}
+	u, ok := users.Lookup(key)
+	if !ok {
+		return "", false
+	}
+	return u.ID, true
 }
 
 // AdminAuthMiddleware is an Echo middleware that rejects non-admin requests.

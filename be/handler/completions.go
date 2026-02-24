@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -61,12 +62,18 @@ func Completions(s *store.Store, lim *limiter.Limiter) echo.HandlerFunc {
 			return c.JSON(http.StatusUnauthorized, echo.Map{"error": "missing API key"})
 		}
 
-		// Admin key bypasses rate limits.
+		// Resolve API key → human-readable user ID.
+		// Admin key resolves to "admin" and bypasses rate limits.
+		userID, ok := auth.ResolveUser(key)
+		if !ok {
+			return c.JSON(http.StatusUnauthorized, echo.Map{"error": "unknown API key"})
+		}
+
 		if !auth.IsAdmin(key) {
-			if err := lim.CheckRPS(key); err != nil {
+			if err := lim.CheckRPS(userID); err != nil {
 				return c.JSON(http.StatusTooManyRequests, echo.Map{"error": "rate limit exceeded"})
 			}
-			if err := lim.CheckQuota(key); err != nil {
+			if err := lim.CheckQuota(userID); err != nil {
 				return c.JSON(http.StatusForbidden, echo.Map{"error": "token quota exceeded"})
 			}
 		}
@@ -87,29 +94,51 @@ func Completions(s *store.Store, lim *limiter.Limiter) echo.HandlerFunc {
 		model := peek.Model
 		isStream := peek.Stream == nil || *peek.Stream // default true per OpenAI spec
 
-		// Enforce per-request token cap: if the admin has set a limit and the
-		// request asks for more tokens, clamp max_tokens before forwarding.
-		// We only rewrite the body when necessary to avoid unnecessary allocs.
-		if cap := lim.MaxTokensPerRequest(key); cap != limiter.INF_TOKEN_PER_REQ {
-			if peek.MaxTokens == nil || *peek.MaxTokens > cap {
-				// Unmarshal into a generic map so we preserve all other fields.
-				var raw map[string]json.RawMessage
-				if err := json.Unmarshal(body, &raw); err == nil {
-					capBytes, _ := json.Marshal(cap)
-					raw["max_tokens"] = capBytes
-					if rewritten, err := json.Marshal(raw); err == nil {
-						body = rewritten
-					}
+		// Enforce per-request token cap and stream_options for accounting.
+		// We use a generic map to preserve all other fields exactly as provided.
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(body, &raw); err == nil {
+			modified := false
+
+			// 1. Enforce max_tokens
+			cap := lim.MaxTokensPerRequest(userID)
+			if cap != limiter.INF_TOKEN_PER_REQ && (peek.MaxTokens == nil || *peek.MaxTokens > cap) {
+				capBytes, _ := json.Marshal(cap)
+				raw["max_tokens"] = capBytes
+				modified = true
+			}
+
+			// 2. Enforce stream_options: { include_usage: true }
+			if isStream {
+				var opts map[string]interface{}
+				if val, ok := raw["stream_options"]; ok {
+					_ = json.Unmarshal(val, &opts)
+				}
+				if opts == nil {
+					opts = make(map[string]interface{})
+				}
+				if include, _ := opts["include_usage"].(bool); !include {
+					opts["include_usage"] = true
+					optsBytes, _ := json.Marshal(opts)
+					raw["stream_options"] = optsBytes
+					modified = true
+				}
+			}
+
+			if modified {
+				if rewritten, err := json.Marshal(raw); err == nil {
+					body = rewritten
 				}
 			}
 		}
 
 		c.Request().Body = io.NopCloser(bytes.NewReader(body))
 		c.Request().ContentLength = int64(len(body))
+		c.Request().Header.Set("Content-Length", strconv.Itoa(len(body)))
 
 		// Attach values to request context so ModifyResponse can read them.
 		req := c.Request().WithContext(
-			contextWith(c.Request().Context(), key, model, isStream),
+			contextWith(c.Request().Context(), userID, model, isStream),
 		)
 		c.SetRequest(req)
 

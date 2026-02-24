@@ -20,8 +20,13 @@ func main() {
 	e := echo.New()
 	e.HideBanner = true
 
-	// Middleware: recover from panics, basic request logging.
+	// Middleware: recover from panics, basic request logging, and CORS
 	e.Use(middleware.Recover())
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"http://localhost:3000", "http://127.0.0.1:3000"},
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
+	}))
 
 	// Inference
 	e.POST("/v1/chat/completions", handler.Completions(s, lim))
@@ -29,10 +34,15 @@ func main() {
 	// User API
 	e.GET("/v1/usage", handler.Usage(s))
 
+	// Auth
+	e.POST("/auth/login", handler.Login())
+
 	// Admin APIs — auth enforced at group level
 	admin := e.Group("/admin", auth.AdminAuthMiddleware)
 	admin.POST("/limits", handler.SetLimits(lim))
 	admin.POST("/suspend", handler.SuspendUser(lim))
+	admin.GET("/usage", handler.AllUsage(s))
+	admin.GET("/limits", handler.AllLimits(lim))
 	admin.GET("/ui", ui.Dashboard(s, lim))
 
 	// Catch-all: explicit 404

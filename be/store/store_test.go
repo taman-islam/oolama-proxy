@@ -51,8 +51,15 @@ func TestGetAll(t *testing.T) {
 	s.Add("user-d", "moondream", 2, 2)
 
 	all := s.GetAll()
-	if len(all) != 2 {
-		t.Errorf("expected 2 users, got %d", len(all))
+	if all["user-c"]["llama3.2:1b"].PromptTokens != 1 {
+		t.Errorf("expected user-c to have 1 prompt token for llama3.2:1b")
+	}
+	if all["user-d"]["moondream"].PromptTokens != 2 {
+		t.Errorf("expected user-d to have 2 prompt tokens for moondream")
+	}
+	// Verify that statically registered users are also seeded.
+	if _, ok := all["alice"]; !ok {
+		t.Errorf("expected static user 'alice' to be seeded in GetAll")
 	}
 }
 
