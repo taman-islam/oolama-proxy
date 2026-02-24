@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"lb/pb"
 	"lb/store"
 	"net/http"
 
@@ -12,6 +13,24 @@ import (
 // Returns token usage for every user, keyed by user → model.
 func AllUsage(s *store.Store) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		return c.JSON(http.StatusOK, s.GetAll())
+		usage := s.GetAll()
+		resp := &pb.AllUsageResponse{
+			UsageByUser: make(map[string]*pb.UsageResponse, len(usage)),
+		}
+
+		for user, models := range usage {
+			userResp := &pb.UsageResponse{
+				UsageByModel: make(map[string]*pb.ModelUsage, len(models)),
+			}
+			for model, u := range models {
+				userResp.UsageByModel[model] = &pb.ModelUsage{
+					PromptTokens:     int32(u.PromptTokens),
+					CompletionTokens: int32(u.CompletionTokens),
+				}
+			}
+			resp.UsageByUser[user] = userResp
+		}
+
+		return c.JSON(http.StatusOK, resp)
 	}
 }

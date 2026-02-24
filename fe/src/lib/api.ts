@@ -1,7 +1,14 @@
 import { getApiKey } from "./auth";
-import type { SetLimitsPayload, SuspendPayload } from "./types";
+import {
+  AllUsageResponse,
+  AllLimitsResponse,
+  UsageResponse,
+  SetLimitsRequest,
+  SetLimitsResponse,
+  SuspendUserRequest,
+  SuspendUserResponse,
+} from "../generated/api";
 
-// Admin calls always use the admin key for the /admin/* routes.
 const BASE = "http://localhost:8000";
 
 function userHeaders(): HeadersInit {
@@ -13,67 +20,59 @@ function userHeaders(): HeadersInit {
 }
 
 /** Fetch usage for the authenticated user. */
-export async function fetchMyUsage() {
+export async function fetchMyUsage(): Promise<UsageResponse> {
   const res = await fetch(`${BASE}/v1/usage`, { headers: userHeaders() });
   if (!res.ok) throw new Error(`My usage fetch failed: ${res.status}`);
-  return res.json() as Promise<
-    Record<string, { prompt_tokens: number; completion_tokens: number }>
-  >;
+  const data = await res.json();
+  return UsageResponse.fromJSON(data);
 }
 
 /** Fetch usage for ALL users via the admin endpoint. */
-export async function fetchAllUsage() {
+export async function fetchAllUsage(): Promise<AllUsageResponse> {
   const res = await fetch(`${BASE}/admin/usage`, { headers: userHeaders() });
   if (!res.ok) throw new Error(`Usage fetch failed: ${res.status}`);
-  // Shape: { "user_id": { "model": { prompt_tokens, completion_tokens } } }
-  return res.json() as Promise<
-    Record<
-      string,
-      Record<string, { prompt_tokens: number; completion_tokens: number }>
-    >
-  >;
+  const data = await res.json();
+  return AllUsageResponse.fromJSON(data);
 }
 
 /** Fetch current limits for all known users from the limiter. */
-export async function fetchAllLimits() {
+export async function fetchAllLimits(): Promise<AllLimitsResponse> {
   const res = await fetch(`${BASE}/admin/limits`, { headers: userHeaders() });
   if (!res.ok) throw new Error(`Limits fetch failed: ${res.status}`);
-  // Shape: { "user_id": { RPS, MaxTokens, MaxTokensPerReq, UsedTokens } }
-  return res.json() as Promise<
-    Record<
-      string,
-      {
-        RPS: number;
-        MaxTokens: number;
-        MaxTokensPerReq: number;
-        UsedTokens: number;
-      }
-    >
-  >;
+  const data = await res.json();
+  return AllLimitsResponse.fromJSON(data);
 }
 
-export async function setLimits(payload: SetLimitsPayload) {
+export async function setLimits(
+  payload: SetLimitsRequest,
+): Promise<SetLimitsResponse> {
+  const reqBody = SetLimitsRequest.toJSON(SetLimitsRequest.create(payload));
   const res = await fetch(`${BASE}/admin/limits`, {
     method: "POST",
     headers: userHeaders(),
-    body: JSON.stringify(payload),
+    body: JSON.stringify(reqBody),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error ?? `Error ${res.status}`);
   }
-  return res.json();
+  const data = await res.json();
+  return SetLimitsResponse.fromJSON(data);
 }
 
-export async function suspendUser(payload: SuspendPayload) {
+export async function suspendUser(
+  payload: SuspendUserRequest,
+): Promise<SuspendUserResponse> {
+  const reqBody = SuspendUserRequest.toJSON(SuspendUserRequest.create(payload));
   const res = await fetch(`${BASE}/admin/suspend`, {
     method: "POST",
     headers: userHeaders(),
-    body: JSON.stringify(payload),
+    body: JSON.stringify(reqBody),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error ?? `Error ${res.status}`);
   }
-  return res.json();
+  const data = await res.json();
+  return SuspendUserResponse.fromJSON(data);
 }

@@ -9,15 +9,11 @@ import {
   suspendUser,
 } from "@/lib/api";
 import { isLoggedIn, isAdmin, getUserId, clearSession } from "@/lib/auth";
-
-interface ModelUsage {
-  prompt_tokens: number;
-  completion_tokens: number;
-}
+import { ModelUsage } from "../generated/api";
 
 interface UserRow {
   userId: string;
-  usage: Record<string, ModelUsage>;
+  usage: { [key: string]: ModelUsage };
 }
 
 interface Toast {
@@ -80,19 +76,19 @@ export default function AdminDashboard() {
         fetchAllUsage(),
         fetchAllLimits(),
       ]);
-      const userRows: UserRow[] = Object.entries(allUsage).map(
-        ([userId, usage]) => ({ userId, usage }),
+      const userRows: UserRow[] = Object.entries(allUsage.usageByUser).map(
+        ([userId, u]) => ({ userId, usage: u.usageByModel }),
       );
       setRows(userRows.length > 0 ? userRows : []);
       // Normalise limiter field names to match our form shape
       setCurrentLimits(
         Object.fromEntries(
-          Object.entries(allLimits).map(([uid, l]) => [
+          Object.entries(allLimits.limits).map(([uid, l]) => [
             uid,
             {
-              rps: l.RPS,
-              max_tokens: l.MaxTokens,
-              max_tokens_per_request: l.MaxTokensPerReq,
+              rps: l.rps,
+              max_tokens: l.maxTokens,
+              max_tokens_per_request: l.maxTokensPerReq,
             },
           ]),
         ),
@@ -113,10 +109,10 @@ export default function AdminDashboard() {
     setPending((p) => ({ ...p, [userId]: true }));
     try {
       await setLimits({
-        user_id: userId,
+        userId: userId,
         rps: Number(f.rps),
-        max_tokens: Number(f.max_tokens),
-        max_tokens_per_request: Number(f.max_tokens_per_request),
+        maxTokens: Number(f.max_tokens),
+        maxTokensPerRequest: Number(f.max_tokens_per_request),
       });
       showToast(`Limits updated for ${userId}`, true);
       setForms((prev) => ({ ...prev, [userId]: DEFAULT_FORM }));
@@ -125,12 +121,12 @@ export default function AdminDashboard() {
         .then((allLimits) =>
           setCurrentLimits(
             Object.fromEntries(
-              Object.entries(allLimits).map(([uid, l]) => [
+              Object.entries(allLimits.limits).map(([uid, l]) => [
                 uid,
                 {
-                  rps: l.RPS,
-                  max_tokens: l.MaxTokens,
-                  max_tokens_per_request: l.MaxTokensPerReq,
+                  rps: l.rps,
+                  max_tokens: l.maxTokens,
+                  max_tokens_per_request: l.maxTokensPerReq,
                 },
               ]),
             ),
@@ -148,7 +144,7 @@ export default function AdminDashboard() {
     if (!confirm(`Suspend ${userId}?`)) return;
     setPending((p) => ({ ...p, [`${userId}:suspend`]: true }));
     try {
-      await suspendUser({ user_id: userId });
+      await suspendUser({ userId: userId });
       showToast(`${userId} suspended`, true);
     } catch (e) {
       showToast(String(e), false);
@@ -269,7 +265,7 @@ function UserCard({
   onSuspend: () => void;
 }) {
   const totalTokens = Object.values(row.usage).reduce(
-    (sum, u) => sum + u.prompt_tokens + u.completion_tokens,
+    (sum, u) => sum + u.promptTokens + u.completionTokens,
     0,
   );
 
@@ -347,13 +343,13 @@ function UserCard({
                   {model}
                 </td>
                 <td className="py-2 text-right">
-                  {u.prompt_tokens.toLocaleString()}
+                  {u.promptTokens.toLocaleString()}
                 </td>
                 <td className="py-2 text-right">
-                  {u.completion_tokens.toLocaleString()}
+                  {u.completionTokens.toLocaleString()}
                 </td>
                 <td className="py-2 text-right font-medium">
-                  {(u.prompt_tokens + u.completion_tokens).toLocaleString()}
+                  {(u.promptTokens + u.completionTokens).toLocaleString()}
                 </td>
               </tr>
             ))

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"lb/auth"
+	"lb/pb"
 	"lb/store"
 	"net/http"
 
@@ -16,6 +17,18 @@ func Usage(s *store.Store) echo.HandlerFunc {
 		if !ok || userID == "" {
 			return c.JSON(http.StatusUnauthorized, echo.Map{"error": "invalid API key"})
 		}
-		return c.JSON(http.StatusOK, s.Get(userID))
+
+		usage := s.Get(userID)
+		resp := &pb.UsageResponse{
+			UsageByModel: make(map[string]*pb.ModelUsage, len(usage)),
+		}
+		for model, u := range usage {
+			resp.UsageByModel[model] = &pb.ModelUsage{
+				PromptTokens:     int32(u.PromptTokens),
+				CompletionTokens: int32(u.CompletionTokens),
+			}
+		}
+
+		return c.JSON(http.StatusOK, resp)
 	}
 }

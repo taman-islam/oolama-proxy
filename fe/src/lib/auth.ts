@@ -1,5 +1,6 @@
 // Thin auth helpers — API key is stored in sessionStorage to simulate a real session.
 // In production, use HttpOnly cookies + a real token exchange.
+import { LoginRequest, LoginResponse } from "../generated/api";
 
 const KEY_STORAGE = "proxy_api_key";
 const USER_STORAGE = "proxy_user_id";
@@ -38,15 +39,19 @@ export function isLoggedIn(): boolean {
 export async function login(
   username: string,
   password: string,
-): Promise<{ user_id: string; api_key: string; is_admin: boolean }> {
+): Promise<LoginResponse> {
+  const reqBody = LoginRequest.toJSON(
+    LoginRequest.create({ username, password }),
+  );
   const res = await fetch("http://localhost:8000/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify(reqBody),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error ?? "Login failed");
   }
-  return res.json();
+  const data = await res.json();
+  return LoginResponse.fromJSON(data);
 }

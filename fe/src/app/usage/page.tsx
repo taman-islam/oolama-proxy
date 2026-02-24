@@ -4,12 +4,11 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMyUsage } from "@/lib/api";
 import { isLoggedIn, getUserId, clearSession } from "@/lib/auth";
+import { ModelUsage } from "../../generated/api";
 
 export default function UsagePage() {
   const router = useRouter();
-  const [usage, setUsage] = useState<
-    Record<string, { prompt_tokens: number; completion_tokens: number }>
-  >({});
+  const [usage, setUsage] = useState<{ [key: string]: ModelUsage }>({});
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
 
@@ -23,8 +22,8 @@ export default function UsagePage() {
 
   const load = useCallback(async () => {
     try {
-      const data = await fetchMyUsage();
-      setUsage(data);
+      const resp = await fetchMyUsage();
+      setUsage(resp.usageByModel);
     } catch (e) {
       console.error(e);
     } finally {
@@ -42,7 +41,7 @@ export default function UsagePage() {
   };
 
   const totalTokens = Object.values(usage).reduce(
-    (sum, u) => sum + u.prompt_tokens + u.completion_tokens,
+    (sum, u) => sum + u.promptTokens + u.completionTokens,
     0,
   );
 
@@ -170,14 +169,14 @@ export default function UsagePage() {
                           {model}
                         </td>
                         <td className="py-3 text-right text-gray-300">
-                          {u.prompt_tokens.toLocaleString()}
+                          {u.promptTokens.toLocaleString()}
                         </td>
                         <td className="py-3 text-right text-gray-300">
-                          {u.completion_tokens.toLocaleString()}
+                          {u.completionTokens.toLocaleString()}
                         </td>
                         <td className="py-3 text-right font-medium text-white">
                           {(
-                            u.prompt_tokens + u.completion_tokens
+                            u.promptTokens + u.completionTokens
                           ).toLocaleString()}
                         </td>
                       </tr>
