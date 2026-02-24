@@ -34,6 +34,11 @@ For deep dives into the API specs and architectural decisions of each stack, ple
 - **Chat Simulator (`/chat`):** A working chat playground restricted to authenticated non-admin users. Connects directly to the proxy using the user's stored API key and renders SSE streaming bubbles in real-time.
 - **Role-Based Routing:** The `/login` page routes Admin credentials directly to the dashboard, and standard users to their chat environments natively.
 
+### API Contracts (`proto/`)
+
+- **Strict Type Definitions:** Shared Protocol Buffer definitions (`api.proto`) establish a strict, language-agnostic contract between the frontend and backend for authentication schemas, admin telemetry payloads, and moderation features.
+- **Auto-Generated Bindings:** Standalone bash scripts (`generate-gopb.sh`, `generate-proto-unix.sh`) seamlessly compile `.proto` files into Go structs (`be/pb`) and TypeScript hydrators (`fe/src/generated`).
+
 ## Getting Started
 
 ### 1. Start Ollama
