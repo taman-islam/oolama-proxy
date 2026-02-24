@@ -32,7 +32,7 @@ For deep dives into the API specs and architectural decisions of each stack, ple
   - Form inputs to hot-reload rate limits (RPS, Max Tokens, Per-Request limit) without restarting the Go proxy.
   - One-click suspend action.
 - **Chat Simulator (`/chat`):** A working chat playground restricted to authenticated non-admin users. Connects directly to the proxy using the user's stored API key and renders SSE streaming bubbles in real-time.
-- **Role-Based Routing:** The `/login` page routes Admin credentials directly to the dashboard, and standard users to their chat environments natively.
+- **Role-Based Routing:** The `/login` page routes Admin credentials directly to the `/admin` dashboard, and standard users to their chat environments natively.
 
 ### API Contracts (`proto/`)
 

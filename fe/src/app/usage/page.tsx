@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { fetchMyUsage } from "@/lib/api";
 import { isLoggedIn, getUserId, clearSession } from "@/lib/auth";
 import { ModelUsage } from "../../generated/api";
+import { Navbar } from "@/components/Navbar";
 
 export default function UsagePage() {
   const router = useRouter();
@@ -48,51 +49,7 @@ export default function UsagePage() {
   return (
     <div className="flex flex-col h-screen" style={{ background: "var(--bg)" }}>
       {/* Header */}
-      <header
-        className="flex items-center justify-between px-6 py-3 border-b shrink-0"
-        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-      >
-        <div className="flex items-center gap-4">
-          <span
-            className="font-semibold text-sm"
-            style={{ color: "var(--purple)" }}
-          >
-            🔮 Proxy Chat
-          </span>
-          <button
-            onClick={() => router.push("/chat")}
-            className="text-xs px-3 py-1 rounded-lg transition-colors"
-            style={{
-              color: "var(--text)",
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
-            }}
-          >
-            ← Back to Chat
-          </button>
-        </div>
-        <div className="flex items-center gap-3">
-          {currentUser && (
-            <span
-              className="text-xs px-3 py-1 rounded-full font-semibold"
-              style={{ background: "#3b0764", color: "#c4b5fd" }}
-            >
-              {currentUser}
-            </span>
-          )}
-          <button
-            onClick={handleLogout}
-            className="text-xs px-3 py-1 rounded-lg transition-colors"
-            style={{
-              background: "var(--surface)",
-              color: "var(--muted)",
-              border: "1px solid var(--border)",
-            }}
-          >
-            Logout
-          </button>
-        </div>
-      </header>
+      <Navbar />
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto p-8 flex flex-col items-center">

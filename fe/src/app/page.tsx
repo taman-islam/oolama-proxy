@@ -1,432 +1,358 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState, useRef, useEffect, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
-  fetchAllUsage,
-  fetchAllLimits,
-  setLimits,
-  suspendUser,
-} from "@/lib/api";
-import { isLoggedIn, isAdmin, getUserId, clearSession } from "@/lib/auth";
-import { ModelUsage } from "../generated/api";
+  isLoggedIn,
+  getUserId,
+  getApiKey,
+  clearSession,
+  isAdmin,
+} from "@/lib/auth";
+import { Navbar } from "@/components/Navbar";
 
-interface UserRow {
-  userId: string;
-  usage: { [key: string]: ModelUsage };
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  image?: string | null;
 }
 
-interface Toast {
-  msg: string;
-  ok: boolean;
-}
-
-interface LimitForm {
-  rps: string;
-  max_tokens: string;
-  max_tokens_per_request: string;
-}
-
-const DEFAULT_FORM: LimitForm = {
-  rps: "",
-  max_tokens: "",
-  max_tokens_per_request: "",
-};
-
-export default function AdminDashboard() {
+export default function ChatPage() {
   const router = useRouter();
-  const [rows, setRows] = useState<UserRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState<Toast | null>(null);
-  const [forms, setForms] = useState<Record<string, LimitForm>>({});
-  const [pending, setPending] = useState<Record<string, boolean>>({});
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [streaming, setStreaming] = useState(false);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
-  const [currentLimits, setCurrentLimits] = useState<
-    Record<
-      string,
-      { rps: number; max_tokens: number; max_tokens_per_request: number }
-    >
-  >({});
+  const [userIsAdmin, setUserIsAdmin] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isLoggedIn()) {
       router.replace("/login");
       return;
     }
-    if (!isAdmin()) {
-      router.replace("/chat");
-      return;
-    }
     setCurrentUser(getUserId());
+    setUserIsAdmin(isAdmin());
+
+    // Load persisted chat
+    const saved = localStorage.getItem(`chat_history_${getUserId()}`);
+    if (saved) {
+      try {
+        setMessages(JSON.parse(saved));
+      } catch {
+        // ignore parse error
+      }
+    }
   }, [router]);
+
+  useEffect(() => {
+    if (messages.length > 0 && currentUser) {
+      // 1. Limit raw message count (keep last 50 messages / 25 turns)
+      let historyToSave = messages.slice(-50);
+
+      try {
+        let serialized = JSON.stringify(historyToSave);
+
+        // 2. Limit byte size (localStorage quota is usually ~5MB, we cap at ~1MB to be safe)
+        // If it's too large (likely due to base64 images), we progressively drop the oldest messages
+        while (serialized.length > 1024 * 1024 && historyToSave.length > 2) {
+          historyToSave = historyToSave.slice(2); // Drop oldest user/assistant pair
+          serialized = JSON.stringify(historyToSave);
+        }
+
+        localStorage.setItem(`chat_history_${currentUser}`, serialized);
+      } catch (err) {
+        console.warn("Failed to serialize or save chat history", err);
+      }
+    }
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, currentUser]);
+
+  useEffect(() => {
+    if (!streaming) {
+      inputRef.current?.focus();
+    }
+  }, [streaming]);
+
+  const clearChat = () => {
+    setMessages([]);
+    localStorage.removeItem(`chat_history_${currentUser}`);
+  };
 
   const handleLogout = () => {
     clearSession();
     router.replace("/login");
   };
 
-  const showToast = (msg: string, ok: boolean) => {
-    setToast({ msg, ok });
-    setTimeout(() => setToast(null), 3500);
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setSelectedImage(event.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+    // Reset input so the same file can be selected again
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const load = useCallback(async () => {
-    try {
-      const [allUsage, allLimits] = await Promise.all([
-        fetchAllUsage(),
-        fetchAllLimits(),
-      ]);
-      const userRows: UserRow[] = Object.entries(allUsage.usageByUser).map(
-        ([userId, u]) => ({ userId, usage: u.usageByModel }),
-      );
-      setRows(userRows.length > 0 ? userRows : []);
-      // Normalise limiter field names to match our form shape
-      setCurrentLimits(
-        Object.fromEntries(
-          Object.entries(allLimits.limits).map(([uid, l]) => [
-            uid,
-            {
-              rps: l.rps,
-              max_tokens: l.maxTokens,
-              max_tokens_per_request: l.maxTokensPerReq,
-            },
-          ]),
-        ),
-      );
-    } catch (e) {
-      showToast(String(e), false);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const removeImage = () => {
+    setSelectedImage(null);
+  };
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const send = async (e: FormEvent) => {
+    e.preventDefault();
+    const text = input.trim();
+    if ((!text && !selectedImage) || streaming) return;
 
-  const handleSetLimits = async (userId: string) => {
-    const f = forms[userId] ?? DEFAULT_FORM;
-    setPending((p) => ({ ...p, [userId]: true }));
+    const currentInput = text;
+    const currentImage = selectedImage;
+
+    setInput("");
+    setSelectedImage(null);
+
+    const newMessages: Message[] = [
+      ...messages,
+      { role: "user", content: currentInput, image: currentImage },
+    ];
+    setMessages(newMessages);
+    setStreaming(true);
+
+    // Append an empty assistant turn we'll stream into
+    setMessages((m) => [...m, { role: "assistant", content: "" }]);
+
+    // Determine model and payload structure based on presence of image
+    const model = currentImage ? "moondream" : "llama3.2";
+
+    const apiMessages = newMessages.map((m) => {
+      if (m.role === "user" && m.image) {
+        return {
+          role: m.role,
+          content: [
+            { type: "text", text: m.content || "Analyze this image." },
+            { type: "image_url", image_url: { url: m.image } },
+          ],
+        };
+      }
+      return {
+        role: m.role,
+        content: m.content,
+      };
+    });
+
     try {
-      await setLimits({
-        userId: userId,
-        rps: Number(f.rps),
-        maxTokens: Number(f.max_tokens),
-        maxTokensPerRequest: Number(f.max_tokens_per_request),
+      const res = await fetch("http://localhost:8000/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${getApiKey() ?? ""}`,
+        },
+        body: JSON.stringify({
+          model,
+          stream: true,
+          messages: apiMessages,
+        }),
       });
-      showToast(`Limits updated for ${userId}`, true);
-      setForms((prev) => ({ ...prev, [userId]: DEFAULT_FORM }));
-      // Refresh limits to reflect new values
-      fetchAllLimits()
-        .then((allLimits) =>
-          setCurrentLimits(
-            Object.fromEntries(
-              Object.entries(allLimits.limits).map(([uid, l]) => [
-                uid,
-                {
-                  rps: l.rps,
-                  max_tokens: l.maxTokens,
-                  max_tokens_per_request: l.maxTokensPerReq,
-                },
-              ]),
-            ),
-          ),
-        )
-        .catch(() => {});
-    } catch (e) {
-      showToast(String(e), false);
+
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => ({ error: "Request failed" }));
+        setMessages((m) => {
+          const copy = [...m];
+          copy[copy.length - 1] = {
+            role: "assistant",
+            content: `⚠️ ${(err as { error: string }).error}`,
+          };
+          return copy;
+        });
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6);
+          if (data === "[DONE]") break;
+          try {
+            const chunk = JSON.parse(data);
+            const delta: string = chunk.choices?.[0]?.delta?.content ?? "";
+            if (delta) {
+              setMessages((m) => {
+                const copy = [...m];
+                copy[copy.length - 1] = {
+                  role: "assistant",
+                  content: copy[copy.length - 1].content + delta,
+                };
+                return copy;
+              });
+            }
+          } catch {
+            /* skip malformed chunks */
+          }
+        }
+      }
     } finally {
-      setPending((p) => ({ ...p, [userId]: false }));
+      setStreaming(false);
     }
   };
-
-  const handleSuspend = async (userId: string) => {
-    if (!confirm(`Suspend ${userId}?`)) return;
-    setPending((p) => ({ ...p, [`${userId}:suspend`]: true }));
-    try {
-      await suspendUser({ userId: userId });
-      showToast(`${userId} suspended`, true);
-    } catch (e) {
-      showToast(String(e), false);
-    } finally {
-      setPending((p) => ({ ...p, [`${userId}:suspend`]: false }));
-    }
-  };
-
-  const setField = (userId: string, field: keyof LimitForm, val: string) =>
-    setForms((prev) => ({
-      ...prev,
-      [userId]: { ...(prev[userId] ?? DEFAULT_FORM), [field]: val },
-    }));
 
   return (
-    <main className="min-h-screen p-8" style={{ background: "var(--bg)" }}>
+    <div className="flex flex-col h-screen" style={{ background: "var(--bg)" }}>
       {/* Header */}
-      <div className="mb-8 flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold" style={{ color: "var(--purple)" }}>
-            🔮 Admin Dashboard
-          </h1>
-          <p className="text-sm mt-1" style={{ color: "var(--muted)" }}>
-            Ollama OpenAI-Compatible Proxy — admin panel
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {currentUser && (
-            <span
-              className="text-xs px-3 py-1 rounded-full"
-              style={{ background: "#3b0764", color: "#c4b5fd" }}
-            >
-              {currentUser}
-            </span>
-          )}
-          <button
-            onClick={handleLogout}
-            className="text-xs px-3 py-1 rounded-lg transition-colors"
-            style={{
-              background: "var(--surface)",
-              color: "var(--muted)",
-              border: "1px solid var(--border)",
-            }}
-          >
-            Logout
-          </button>
-        </div>
-      </div>
-
-      {/* Toast */}
-      {toast && (
-        <div
-          className="fixed bottom-6 right-6 px-4 py-2 rounded-lg text-sm font-medium shadow-lg z-50 transition-all"
-          style={{
-            background: toast.ok ? "var(--green-bg)" : "var(--red-bg)",
-            color: toast.ok ? "var(--green-text)" : "var(--red-text)",
-            border: `1px solid ${toast.ok ? "var(--green-border)" : "var(--red-border)"}`,
-          }}
-        >
-          {toast.msg}
-        </div>
-      )}
-
-      {loading ? (
-        <p style={{ color: "var(--muted)" }}>Loading…</p>
-      ) : (
-        rows.map((row) => (
-          <UserCard
-            key={row.userId}
-            row={row}
-            form={forms[row.userId] ?? DEFAULT_FORM}
-            currentLimit={currentLimits[row.userId]}
-            isPending={!!pending[row.userId]}
-            isSuspending={!!pending[`${row.userId}:suspend`]}
-            onFieldChange={(f, v) => setField(row.userId, f, v)}
-            onSetLimits={() => handleSetLimits(row.userId)}
-            onSuspend={() => handleSuspend(row.userId)}
-          />
-        ))
-      )}
-
-      <button
-        onClick={load}
-        className="mt-6 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-        style={{
-          background: "var(--surface)",
-          color: "var(--purple-light)",
-          border: "1px solid var(--border)",
-        }}
-      >
-        ↻ Refresh
-      </button>
-    </main>
-  );
-}
-
-function UserCard({
-  row,
-  form,
-  currentLimit,
-  isPending,
-  isSuspending,
-  onFieldChange,
-  onSetLimits,
-  onSuspend,
-}: {
-  row: UserRow;
-  form: LimitForm;
-  currentLimit?: {
-    rps: number;
-    max_tokens: number;
-    max_tokens_per_request: number;
-  };
-  isPending: boolean;
-  isSuspending: boolean;
-  onFieldChange: (f: keyof LimitForm, v: string) => void;
-  onSetLimits: () => void;
-  onSuspend: () => void;
-}) {
-  const totalTokens = Object.values(row.usage).reduce(
-    (sum, u) => sum + u.promptTokens + u.completionTokens,
-    0,
-  );
-
-  return (
-    <div
-      className="rounded-xl p-6 mb-6"
-      style={{
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-      }}
-    >
-      {/* User header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <span
-            className="px-3 py-1 rounded-full text-xs font-semibold"
-            style={{ background: "#3b0764", color: "#c4b5fd" }}
-          >
-            {row.userId}
-          </span>
-          <span className="text-sm" style={{ color: "var(--muted)" }}>
-            {totalTokens.toLocaleString()} tokens total
-          </span>
-        </div>
+      <Navbar>
+        <span className="text-xs px-2 py-1 rounded bg-black/20 text-gray-400 border border-white/5 ml-2">
+          Auto-switches to {selectedImage ? "moondream" : "llama3.2"}
+        </span>
         <button
-          onClick={onSuspend}
-          disabled={isSuspending}
-          className="px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+          onClick={clearChat}
+          className="text-xs px-3 py-1 rounded-lg transition-colors cursor-pointer"
           style={{
-            background: "var(--red-bg)",
             color: "var(--red-text)",
+            background: "var(--surface)",
             border: "1px solid var(--red-border)",
           }}
         >
-          {isSuspending ? "Suspending…" : "Suspend"}
+          🗑️ Clear
         </button>
+      </Navbar>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-6 flex flex-col gap-4">
+        {messages.length === 0 && (
+          <p
+            className="text-center text-sm mt-16"
+            style={{ color: "var(--muted)" }}
+          >
+            Start a conversation…
+          </p>
+        )}
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            className={`flex flex-col gap-2 ${m.role === "user" ? "items-end" : "items-start"}`}
+          >
+            {m.image && (
+              <div
+                className="max-w-[50%] rounded-xl overflow-hidden border"
+                style={{ borderColor: "var(--border)" }}
+              >
+                <img
+                  src={m.image}
+                  alt="Uploaded attachment"
+                  className="w-full object-cover"
+                />
+              </div>
+            )}
+            <div
+              className={`max-w-[75%] px-4 py-2 text-sm whitespace-pre-wrap ${!m.content && m.image ? "hidden" : ""}`}
+              style={
+                m.role === "user"
+                  ? {
+                      background: "var(--purple)",
+                      color: "#fff",
+                      borderRadius: "16px",
+                      borderBottomRightRadius: "4px",
+                    }
+                  : {
+                      background: "var(--surface)",
+                      color: "var(--text)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "16px",
+                      borderBottomLeftRadius: "4px",
+                    }
+              }
+            >
+              {m.content ||
+                (m.role === "assistant" && (
+                  <span style={{ opacity: 0.4 }}>▌</span>
+                ))}
+            </div>
+          </div>
+        ))}
+        <div ref={bottomRef} />
       </div>
 
-      {/* Usage table */}
-      <table className="w-full text-sm mb-6">
-        <thead>
-          <tr
-            style={{
-              color: "var(--muted)",
-              borderBottom: "1px solid var(--border)",
-            }}
-          >
-            <th className="text-left pb-2 font-medium">Model</th>
-            <th className="text-right pb-2 font-medium">Prompt</th>
-            <th className="text-right pb-2 font-medium">Completion</th>
-            <th className="text-right pb-2 font-medium">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {Object.entries(row.usage).length === 0 ? (
-            <tr>
-              <td
-                colSpan={4}
-                className="py-3 text-center"
-                style={{ color: "var(--muted)" }}
-              >
-                No usage recorded
-              </td>
-            </tr>
-          ) : (
-            Object.entries(row.usage).map(([model, u]) => (
-              <tr
-                key={model}
-                style={{ borderBottom: "1px solid var(--border)" }}
-              >
-                <td
-                  className="py-2 font-mono"
-                  style={{ color: "var(--purple-light)" }}
-                >
-                  {model}
-                </td>
-                <td className="py-2 text-right">
-                  {u.promptTokens.toLocaleString()}
-                </td>
-                <td className="py-2 text-right">
-                  {u.completionTokens.toLocaleString()}
-                </td>
-                <td className="py-2 text-right font-medium">
-                  {(u.promptTokens + u.completionTokens).toLocaleString()}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-
-      {/* Set Limits form */}
-      <div>
-        <p
-          className="text-xs font-semibold mb-2"
-          style={{ color: "var(--purple-light)" }}
-        >
-          Set Limits
-        </p>
-        <div className="flex gap-3 flex-wrap">
-          {[
-            { field: "rps" as const, label: "RPS", current: currentLimit?.rps },
-            {
-              field: "max_tokens" as const,
-              label: "Max Tokens",
-              current: currentLimit?.max_tokens,
-            },
-            {
-              field: "max_tokens_per_request" as const,
-              label: "Per Request",
-              current: currentLimit?.max_tokens_per_request,
-            },
-          ].map(({ field, label, current }) => (
-            <div key={field} className="flex flex-col gap-1">
-              <label className="text-xs" style={{ color: "var(--muted)" }}>
-                {label}
-                {current !== undefined && current !== -1 && (
-                  <span
-                    className="ml-1 font-mono"
-                    style={{ color: "var(--purple-light)" }}
-                  >
-                    (now: {current})
-                  </span>
-                )}
-                {current === -1 && (
-                  <span className="ml-1" style={{ color: "var(--muted)" }}>
-                    (∞)
-                  </span>
-                )}
-              </label>
-              <input
-                type="number"
-                min={1}
-                value={form[field]}
-                onChange={(e) => onFieldChange(field, e.target.value)}
-                placeholder={
-                  current !== undefined && current !== -1
-                    ? String(current)
-                    : "∞"
-                }
-                className="w-28 px-2 py-1 rounded-md text-sm outline-none"
-                style={{
-                  background: "var(--bg)",
-                  border: "1px solid var(--border)",
-                  color: "var(--text)",
-                }}
-              />
-            </div>
-          ))}
-          <div className="flex items-end">
+      {/* Input */}
+      <form
+        onSubmit={send}
+        className="shrink-0 flex flex-col px-4 py-4 border-t"
+        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+      >
+        {selectedImage && (
+          <div className="mb-3 relative inline-block w-20 h-20 group">
+            <img
+              src={selectedImage}
+              className="w-full h-full object-cover rounded-lg border"
+              style={{ borderColor: "var(--border)" }}
+              alt="Preview"
+            />
             <button
-              onClick={onSetLimits}
-              disabled={isPending}
-              className="px-4 py-1 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-              style={{ background: "var(--purple)", color: "#fff" }}
+              type="button"
+              onClick={removeImage}
+              className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity transition-colors"
             >
-              {isPending ? "Saving…" : "Apply"}
+              ×
             </button>
           </div>
+        )}
+        <div className="flex gap-2 relative">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="w-10 h-10 flex items-center justify-center rounded-xl transition-colors shrink-0"
+            style={{
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              color: "var(--text)",
+            }}
+          >
+            <span className="text-lg opacity-80">+</span>
+          </button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleImageUpload}
+            accept="image/*"
+            className="hidden"
+          />
+
+          <input
+            ref={inputRef}
+            autoFocus
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={selectedImage ? "Ask about this image..." : "Message…"}
+            disabled={streaming}
+            className="flex-1 px-4 py-2 rounded-xl text-sm outline-none"
+            style={{
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              color: "var(--text)",
+            }}
+          />
+          <button
+            type="submit"
+            disabled={streaming || (!input.trim() && !selectedImage)}
+            className="px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-40 transition-opacity"
+            style={{ background: "var(--purple)", color: "#fff" }}
+          >
+            {streaming ? "…" : "Send"}
+          </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

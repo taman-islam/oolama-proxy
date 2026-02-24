@@ -18,7 +18,7 @@ export default function LoginPage() {
     try {
       const { userId, apiKey, isAdmin } = await login(username, password);
       saveSession(userId, apiKey, isAdmin);
-      router.push(isAdmin ? "/" : "/chat");
+      router.push(isAdmin ? "/admin" : "/");
     } catch (e) {
       setError(String(e).replace("Error: ", ""));
     } finally {
