@@ -20,8 +20,6 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-const ollamaBase = "http://localhost:11434"
-
 var reqCount uint64
 
 // usagePayload is the shape of the usage field in Ollama/OpenAI responses.
@@ -35,7 +33,7 @@ type usagePayload struct {
 // Completions handles POST /v1/chat/completions.
 // It authenticates the caller, enforces rate/quota limits, proxies the request
 // to Ollama, and accounts for token usage without blocking the inference path.
-func Completions(s *store.Store, lim *limiter.Limiter) echo.HandlerFunc {
+func Completions(ollamaBase string, s *store.Store, lim *limiter.Limiter) echo.HandlerFunc {
 	upstream, _ := url.Parse(ollamaBase)
 
 	proxy := httputil.NewSingleHostReverseProxy(upstream)

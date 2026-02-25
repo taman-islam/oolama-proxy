@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"lb/auth"
 	"lb/handler"
 	"lb/limiter"
@@ -8,6 +9,7 @@ import (
 	"lb/ui"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -15,6 +17,20 @@ import (
 )
 
 func main() {
+	var config struct {
+		OllamaURL string `json:"ollama_url"`
+		Port      string `json:"port"`
+	}
+	// Fallback defaults
+	config.OllamaURL = "http://localhost:11434"
+	config.Port = ":8000"
+
+	if b, err := os.ReadFile("config.json"); err == nil {
+		json.Unmarshal(b, &config)
+	} else {
+		log.Println("warn: config.json not found, using defaults")
+	}
+
 	s := store.New()
 	lim := limiter.New()
 
@@ -38,7 +54,7 @@ func main() {
 	})
 
 	// Inference
-	e.POST("/v1/chat/completions", handler.Completions(s, lim), auth.AuthMiddleware)
+	e.POST("/v1/chat/completions", handler.Completions(config.OllamaURL, s, lim), auth.AuthMiddleware)
 
 	// User API
 	e.GET("/v1/usage", handler.Usage(s), auth.AuthMiddleware)
@@ -59,8 +75,8 @@ func main() {
 		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
 	})
 
-	log.Println("Proxy listening on :8000  →  Ollama at http://localhost:11434")
-	if err := e.Start(":8000"); err != nil {
+	log.Printf("Proxy listening on %s  →  Ollama at %s\n", config.Port, config.OllamaURL)
+	if err := e.Start(config.Port); err != nil {
 		log.Fatal(err)
 	}
 }
