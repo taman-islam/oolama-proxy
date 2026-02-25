@@ -127,7 +127,7 @@ export default function ChatPage() {
     setMessages((m) => [...m, { role: "assistant", content: "" }]);
 
     // Determine model and payload structure based on presence of image
-    const model = currentImage ? "moondream" : "llama3.2";
+    const model = currentImage ? "moondream" : "llama3.2:latest";
 
     const apiMessages = newMessages.map((m) => {
       if (m.role === "user" && m.image) {
