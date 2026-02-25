@@ -8,16 +8,21 @@ import (
 	"lb/auth"
 	"lb/limiter"
 	"lb/store"
+	"log"
+	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/labstack/echo/v4"
 )
 
 const ollamaBase = "http://localhost:11434"
+
+var reqCount uint64
 
 // usagePayload is the shape of the usage field in Ollama/OpenAI responses.
 type usagePayload struct {
@@ -34,6 +39,16 @@ func Completions(s *store.Store, lim *limiter.Limiter) echo.HandlerFunc {
 	upstream, _ := url.Parse(ollamaBase)
 
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
+
+	// Create a custom director to enforce the correct upstream Host
+	// while stripping headers that Ollama might reject (like Origin from extensions)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.Host = upstream.Host
+		req.Header.Del("Origin")
+	}
+
 	// Disable response buffering — forward chunks immediately.
 	proxy.FlushInterval = -1
 
@@ -57,19 +72,16 @@ func Completions(s *store.Store, lim *limiter.Limiter) echo.HandlerFunc {
 	}
 
 	return func(c echo.Context) error {
-		key := auth.ExtractKey(c)
-		if key == "" {
-			return c.JSON(http.StatusUnauthorized, echo.Map{"error": "missing API key"})
+		count := atomic.AddUint64(&reqCount, 1)
+		// log 10% of requests for debugging
+		if rand.Intn(10) == 0 {
+			log.Printf("[Req #%d] ==> Incoming /v1/chat/completions request (IP: %s)", count, c.RealIP())
 		}
 
-		// Resolve API key → human-readable user ID.
-		// Admin key resolves to "admin" and bypasses rate limits.
-		userID, ok := auth.ResolveUser(key)
-		if !ok {
-			return c.JSON(http.StatusUnauthorized, echo.Map{"error": "unknown API key"})
-		}
+		userID := c.Get(auth.UserIDKey).(string)
+		admin := c.Get(auth.AdminCtxKey).(bool)
 
-		if !auth.IsAdmin(key) {
+		if !admin {
 			if err := lim.CheckRPS(userID); err != nil {
 				return c.JSON(http.StatusTooManyRequests, echo.Map{"error": "rate limit exceeded"})
 			}
@@ -93,6 +105,17 @@ func Completions(s *store.Store, lim *limiter.Limiter) echo.HandlerFunc {
 
 		model := peek.Model
 		isStream := peek.Stream == nil || *peek.Stream // default true per OpenAI spec
+
+		var requestedMaxTokens string
+		if peek.MaxTokens != nil {
+			requestedMaxTokens = strconv.FormatInt(*peek.MaxTokens, 10)
+		} else {
+			requestedMaxTokens = "nil"
+		}
+		// log 10% of requests for debugging
+		if rand.Intn(10) == 0 {
+			log.Printf("    Parsed Model: %s, Stream: %t, Requested MaxTokens: %s", peek.Model, isStream, requestedMaxTokens)
+		}
 
 		// Enforce per-request token cap and stream_options for accounting.
 		// We use a generic map to preserve all other fields exactly as provided.
@@ -142,6 +165,9 @@ func Completions(s *store.Store, lim *limiter.Limiter) echo.HandlerFunc {
 		)
 		c.SetRequest(req)
 
+		if rand.Intn(10) == 0 {
+			log.Printf("    Forwarding to upstream proxy...")
+		}
 		proxy.ServeHTTP(c.Response(), c.Request())
 		return nil
 	}
@@ -178,14 +204,26 @@ func accountStream(resp *http.Response, user, model string, s *store.Store, lim 
 	// (the HTTP response writer) and our pipe writer.
 	tee := io.TeeReader(resp.Body, pw)
 
-	// Replace resp.Body with the tee so the proxy forwards the tee stream.
-	resp.Body = io.NopCloser(tee)
+	// We must close the pipe writer when the original body is closed,
+	// otherwise the scanner goroutine below will hang forever waiting for EOF.
+	resp.Body = &teeReadCloser{
+		Reader: tee,
+		Closer: resp.Body,
+		pw:     pw,
+	}
 
 	go func() {
-		defer pw.Close()
-		// We must drain the tee reader — this is driven by the proxy
-		// copying resp.Body to the client. We only need to read from pr.
+		// Ensure we always drain the pipe entirely, even if the scanner fails or exits early.
+		// If the pipe isn't drained, TeeReader's pw.Write will block forever and freeze the proxy stream.
+		defer func() {
+			io.Copy(io.Discard, pr)
+		}()
+
+		// scanner reads from the read-half of our pipe.
 		scanner := bufio.NewScanner(pr)
+		// Provide a larger buffer (up to 1MB) for exceptionally large SSE JSON chunks so it doesn't ErrTooLong
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
 
 		var lastUsageLine string
 		for scanner.Scan() {
@@ -194,9 +232,6 @@ func accountStream(resp *http.Response, user, model string, s *store.Store, lim 
 				continue
 			}
 			data := strings.TrimPrefix(line, "data: ")
-			if data == "[DONE]" {
-				break
-			}
 			// Retain only lines that contain a usage field.
 			if strings.Contains(data, `"usage"`) {
 				lastUsageLine = data
@@ -214,4 +249,17 @@ func accountStream(resp *http.Response, user, model string, s *store.Store, lim 
 		s.Add(user, model, p.Usage.PromptTokens, p.Usage.CompletionTokens)
 		lim.ConsumeTokens(user, total)
 	}()
+}
+
+type teeReadCloser struct {
+	io.Reader
+	io.Closer
+	pw *io.PipeWriter
+}
+
+func (t *teeReadCloser) Close() error {
+	err := t.Closer.Close()
+	// Signal to the scanner that no more bytes are coming.
+	t.pw.Close()
+	return err
 }

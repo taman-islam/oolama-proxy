@@ -11,6 +11,7 @@ import (
 // TODO(Taman / critical): Move to vault and make this configurable.
 const (
 	AdminCtxKey = "adminCtxKey"
+	UserIDKey   = "user_id"
 )
 
 // ExtractKey pulls the Bearer token from the Authorization header.
@@ -52,7 +53,29 @@ func AdminAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		if !IsAdmin(ExtractKey(c)) {
 			return c.JSON(http.StatusUnauthorized, echo.Map{"error": "admin access required"})
 		}
+		c.Set(UserIDKey, "admin")
 		c.Set(AdminCtxKey, true)
+		return next(c)
+	}
+}
+
+// AuthMiddleware is an Echo middleware that requires a valid API key.
+// It resolves the user ID and injects it into the context for downstream handlers.
+func AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		key := ExtractKey(c)
+		if key == "" {
+			return c.JSON(http.StatusUnauthorized, echo.Map{"error": "missing API key"})
+		}
+
+		userID, ok := ResolveUser(key)
+		if !ok {
+			return c.JSON(http.StatusUnauthorized, echo.Map{"error": "unknown API key"})
+		}
+
+		c.Set(UserIDKey, userID)
+		c.Set(AdminCtxKey, IsAdmin(key))
+
 		return next(c)
 	}
 }

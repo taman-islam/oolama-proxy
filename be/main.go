@@ -8,6 +8,7 @@ import (
 	"lb/ui"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -22,17 +23,25 @@ func main() {
 
 	// Middleware: recover from panics, basic request logging, and CORS
 	e.Use(middleware.Recover())
+	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		LogValuesFunc: logRequestValues,
+	}))
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"http://localhost:3000", "http://127.0.0.1:3000"},
+		AllowOrigins: []string{"http://localhost:3000", "http://127.0.0.1:3000", "*"},
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete},
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
 	}))
 
+	// Allow CORS preflights to succeed gracefully instead of hitting the catch-all 404
+	e.OPTIONS("/*", func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+
 	// Inference
-	e.POST("/v1/chat/completions", handler.Completions(s, lim))
+	e.POST("/v1/chat/completions", handler.Completions(s, lim), auth.AuthMiddleware)
 
 	// User API
-	e.GET("/v1/usage", handler.Usage(s))
+	e.GET("/v1/usage", handler.Usage(s), auth.AuthMiddleware)
 
 	// Auth
 	e.POST("/auth/login", handler.Login())
@@ -54,4 +63,22 @@ func main() {
 	if err := e.Start(":8000"); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func logRequestValues(c echo.Context, v middleware.RequestLoggerValues) error {
+	userID, ok := c.Get(auth.UserIDKey).(string)
+	if !ok {
+		userID = "anonymous"
+	}
+
+	c.Logger().Infof(
+		"%s %d %s %s (User: %s) %v",
+		v.StartTime.Format(time.RFC3339),
+		v.Status,
+		v.Method,
+		v.URI,
+		userID,
+		v.Latency,
+	)
+	return nil
 }
